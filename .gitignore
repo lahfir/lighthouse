@@ -71,3 +71,9 @@ build/test/page-functions-test-case*out*.js
 build/test/page-functions-test-case*out*.js.map
 
 .aider*
+
+# Claude Code development files
+CLAUDE.md
+
+.claude/
+AGENTS.md

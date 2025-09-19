@@ -1,0 +1,36 @@
+{
+  "tokens": {
+    "grid": "grid",
+    "flex": "flexbox",
+    "transform": "transforms2d",
+    "@container": "container-queries",
+    ":has": "has",
+    ":where": "where",
+    ":is": "is",
+    "dialog": "dialog",
+    "popover": "popover",
+    "inert": "inert",
+    "Promise": "promises",
+    "fetch": "fetch",
+    "IntersectionObserver": "intersectionobserver",
+    "ResizeObserver": "resizeobserver",
+    "Array.prototype.at": "array-at",
+    "structuredClone": "structuredclone",
+    "WebSocket": "websockets",
+    "Worker": "workers"
+  },
+  "patterns": {
+    "css": [
+      {
+        "regex": "^grid-",
+        "feature": "grid"
+      }
+    ],
+    "js": [
+      {
+        "regex": "^Intl\\.",
+        "feature": "intl"
+      }
+    ]
+  }
+}

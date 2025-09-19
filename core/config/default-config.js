@@ -329,6 +329,7 @@ const defaultConfig = {
     'insights/render-blocking-insight',
     'insights/third-parties-insight',
     'insights/viewport-insight',
+    'baseline-readiness',
   ],
   groups: {
     'metrics': {
@@ -633,6 +634,14 @@ const defaultConfig = {
         {id: 'canonical', weight: 1, group: 'seo-content'},
         // Manual audits
         {id: 'structured-data', weight: 0},
+      ],
+    },
+    'baseline': {
+      title: 'Baseline',
+      description: 'Checks whether used Web Platform features are Baseline-safe (Newly/Widely).',
+      supportedModes: ['navigation', 'snapshot'],
+      auditRefs: [
+        {id: 'baseline-readiness', weight: 1},
       ],
     },
   },
