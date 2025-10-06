@@ -8,6 +8,8 @@
  * @fileoverview Calculates Baseline readiness score
  */
 
+import {loadTargets, uaSupportFactor} from './targets.js';
+
 /** @typedef {import('./webstatus-client.js').BaselineStatus} BaselineStatus */
 /** @typedef {import('./tokens.js').Token} Token */
 
@@ -17,9 +19,11 @@
  *   status: string,
  *   low_date?: string,
  *   high_date?: string,
- *   where?: string,
+ *   where?: any,
  *   weight?: number,
- *   isCore?: boolean
+ *   weightReason?: string,
+ *   isCore?: boolean,
+ *   originType?: string
  * }} BaselineRow
  */
 
@@ -37,14 +41,13 @@
  * @param {string} featureId
  * @param {Object} coverageData
  * @param {Token[]} tokens
- * @return {number} Weight between 0.3 and 2.0
+ * @return {{weight: number, reason: string}}
  */
 function calculateUsageWeight(featureId, coverageData, tokens) {
-  // Base weight depends on feature criticality
-  let weight = isCoreFeature(featureId) ? 1.2 : 1.0;
+  let weight = 1.0;
+  let reason = '';
 
   // Count actual token occurrences for this feature
-  // Ensure featureId is a string before calling toLowerCase()
   const featureIdStr = String(featureId || '').toLowerCase();
   const tokenCount = tokens.filter(
     (token) =>
@@ -54,15 +57,20 @@ function calculateUsageWeight(featureId, coverageData, tokens) {
 
   // Adjust weight based on usage frequency
   if (tokenCount > 50) {
-    weight *= 1.8; // Very high usage
+    weight = 1.5; // High usage
+    reason = 'high usage';
   } else if (tokenCount > 20) {
-    weight *= 1.5; // High usage
+    weight = 1.3;
+    reason = 'medium-high usage';
   } else if (tokenCount > 5) {
-    weight *= 1.2; // Medium usage
+    weight = 1.1;
+    reason = 'medium usage';
   } else if (tokenCount === 1) {
-    weight *= 0.7; // Single use
+    weight = 0.8;
+    reason = 'single use';
   } else if (tokenCount === 0) {
-    weight *= 0.3; // Detected but unused (possibly polyfilled)
+    weight = 0.5;
+    reason = 'unused';
   }
 
   // If we have actual coverage data, incorporate it
@@ -73,25 +81,27 @@ function calculateUsageWeight(featureId, coverageData, tokens) {
       1.5
     );
     weight *= coverageMultiplier;
+    reason += reason ? ', coverage-adjusted' : 'coverage-adjusted';
   }
 
-  return Math.min(Math.max(weight, 0.3), 2.0);
+  // Clamp to [0.5, 1.5] range
+  weight = Math.min(Math.max(weight, 0.5), 1.5);
+
+  return {weight, reason};
 }
 
 /**
- * Get points for baseline status with enhanced scoring
+ * Get points for baseline status
  * @param {string} status
- * @param {boolean} isCore - Whether this is a core web platform feature
  * @return {number}
  */
-function getStatusPoints(status, isCore = false) {
+function getStatusPoints(status) {
   switch (status) {
     case "widely":
-      return 3; // Increased for better discrimination
+      return 2;
     case "newly":
-      return isCore ? 1.5 : 2; // Core features penalized less for being newly available
+      return 1;
     case "limited":
-      return isCore ? -1 : 0; // Core features with limited support penalized
     case "unknown":
     default:
       return 0;
@@ -241,16 +251,32 @@ function findFeatureLocation(featureId, tokens, tokenToFeatureMap) {
 }
 
 /**
+ * Niche features that get downweighted when vendor-only
+ * @type {Set<string>}
+ */
+const nicheFeatures = new Set([
+  'web-nfc',
+  'webnn',
+  'compute-pressure',
+  'document-picture-in-picture',
+]);
+
+/**
  * Calculate Baseline readiness score with enhanced algorithm
  * @param {Map<string, BaselineStatus>} featureStatuses
  * @param {Token[]} tokens
  * @param {Map<string, string>} tokenToFeatureMap
  * @param {Object=} usageData Optional usage/coverage data
+ * @param {Object=} settings Optional settings for UA distribution
  * @return {BaselineScore}
  */
-function calculateScore(featureStatuses, tokens, tokenToFeatureMap, usageData) {
+function calculateScore(featureStatuses, tokens, tokenToFeatureMap, usageData, settings) {
   const rows = [];
   const warnings = [];
+
+  // Load UA distribution targets
+  const targets = loadTargets({settings: settings || {}});
+  const uaDistribution = targets.uaDistribution;
 
   let totalPoints = 0;
   let maxPoints = 0;
@@ -260,12 +286,38 @@ function calculateScore(featureStatuses, tokens, tokenToFeatureMap, usageData) {
   // Process each feature
   for (const [featureId, status] of featureStatuses) {
     const isCore = isCoreFeature(featureId);
-    const weight = calculateUsageWeight(featureId, usageData, tokens);
-    const points = getStatusPoints(status.status, isCore);
+
+    // Calculate base usage weight
+    const usageResult = calculateUsageWeight(featureId, usageData, tokens);
+    let weight = usageResult.weight;
+    let weightReason = usageResult.reason;
+
+    // Apply UA factor
+    const uaFactor = uaSupportFactor(status.status, uaDistribution);
+    weight *= uaFactor;
+    if (uaFactor !== 1.0) {
+      weightReason += (weightReason ? ', ' : '') + `UA factor ${uaFactor.toFixed(2)}`;
+    }
+
+    // Check for vendor-only origin (will be set by tokens.js)
+    const originType = tokens.find(t =>
+      tokenToFeatureMap.get(t.token) === featureId
+    )?.originType || 'first-party';
+
+    // Apply vendor-only downweight for niche features
+    if (originType === 'vendor' && nicheFeatures.has(featureId)) {
+      weight *= 0.75;
+      weightReason += (weightReason ? ', ' : '') + 'vendor-only';
+    }
+
+    // Final clamp to [0.5, 1.5]
+    weight = Math.min(Math.max(weight, 0.5), 1.5);
+
+    const points = getStatusPoints(status.status);
     const weightedPoints = points * weight;
 
     totalPoints += weightedPoints;
-    maxPoints += 3 * weight; // Max is now 3 points per feature
+    maxPoints += 2 * weight; // Max is 2 points per feature
 
     if (status.status === "limited") {
       limitedFeatureCount++;
@@ -282,7 +334,9 @@ function calculateScore(featureStatuses, tokens, tokenToFeatureMap, usageData) {
       high_date: formatDate(status.high_date),
       where: findFeatureLocation(featureId, tokens, tokenToFeatureMap),
       weight: weight !== 1.0 ? weight : undefined,
-      isCore: isCore || undefined, // Only show if true
+      weightReason: weightReason || undefined,
+      isCore: isCore || undefined,
+      originType: originType !== 'first-party' ? originType : undefined,
     });
   }
 
@@ -306,19 +360,19 @@ function calculateScore(featureStatuses, tokens, tokenToFeatureMap, usageData) {
     );
   }
 
-  // Sort rows by priority: core limited features first, then by status impact
+  // Defensible sorting: Limited → Newly → Widely, then by weight desc, then by feature_id
   rows.sort((a, b) => {
-    // Prioritize core features with issues
-    if (a.isCore && !b.isCore && a.status === "limited") return -1;
-    if (b.isCore && !a.isCore && b.status === "limited") return 1;
-
-    // Then sort by status impact (limited first as they need attention)
-    const statusOrder = { limited: 0, unknown: 1, newly: 2, widely: 3 };
+    // Sort by status (limited first)
+    const statusOrder = { limited: 0, newly: 1, widely: 2, unknown: 3 };
     const statusDiff = statusOrder[a.status] - statusOrder[b.status];
     if (statusDiff !== 0) return statusDiff;
 
-    // Finally by weight (higher impact first)
-    return (b.weight || 1) - (a.weight || 1);
+    // Then by weight (higher impact first)
+    const weightDiff = (b.weight || 1) - (a.weight || 1);
+    if (weightDiff !== 0) return weightDiff;
+
+    // Finally by feature_id for deterministic ordering
+    return a.feature_id.localeCompare(b.feature_id);
   });
 
   const numeric100 = Math.round(score01 * 100);

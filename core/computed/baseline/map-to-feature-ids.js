@@ -21,7 +21,7 @@ let featureMapCache = null;
 
 /**
  * Load the feature map from disk
- * @return {{tokens: Object<string, string>, patterns: {css: Array, js: Array}}}
+ * @return {{tokens: Object<string, string>, patterns: {css: Array, js: Array}, mapVersion?: string}}
  */
 function loadFeatureMap() {
   if (featureMapCache) return featureMapCache;
@@ -125,7 +125,7 @@ function normalizeToken(token, type) {
 /**
  * Map tokens to feature IDs
  * @param {Token[]} tokens
- * @return {{ids: Set<string>, unresolved: Token[]}}
+ * @return {{ids: Set<string>, unresolved: Token[], mapVersion?: string}}
  */
 function mapTokensToFeatureIds(tokens) {
   const featureMap = loadFeatureMap();
@@ -189,7 +189,11 @@ function mapTokensToFeatureIds(tokens) {
     unresolved.push(token);
   }
 
-  return { ids: featureIds, unresolved };
+  return {
+    ids: featureIds,
+    unresolved,
+    mapVersion: featureMap.mapVersion
+  };
 }
 
 /**

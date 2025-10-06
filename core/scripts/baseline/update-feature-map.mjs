@@ -212,6 +212,23 @@ function extractTokensFromCompat(compatStr) {
 }
 
 /**
+ * Get the web-features package version/commit
+ * @return {string}
+ */
+function getMapVersion() {
+  try {
+    const packageJsonPath = path.resolve(
+      path.dirname(fileURLToPath(import.meta.url)),
+      '../../../node_modules/web-features/package.json'
+    );
+    const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf8'));
+    return packageJson.version || 'unknown';
+  } catch {
+    return 'unknown';
+  }
+}
+
+/**
  * Build token→feature_id mapping
  * @param {Map<string, WebFeature>} features
  * @param {boolean} full
@@ -247,6 +264,8 @@ function buildTokenMap(features, full) {
   jsPatterns.push({regex: '^WebRTC', feature: 'webrtc'});
   jsPatterns.push({regex: '^Intl\\.', feature: 'intl'});
 
+  const mapVersion = getMapVersion();
+
   // Limit size unless --full flag
   if (!full) {
     const entries = Object.entries(tokenMap);
@@ -254,12 +273,14 @@ function buildTokenMap(features, full) {
     return {
       tokens: limited,
       patterns: {css: cssPatterns, js: jsPatterns},
+      mapVersion,
     };
   }
 
   return {
     tokens: tokenMap,
     patterns: {css: cssPatterns, js: jsPatterns},
+    mapVersion,
   };
 }
 
@@ -298,6 +319,7 @@ function createSeedMap() {
       css: [{regex: '^grid-', feature: 'grid'}],
       js: [{regex: '^Intl\\.', feature: 'intl'}],
     },
+    mapVersion: 'seed',
   };
 }
 

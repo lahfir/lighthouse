@@ -10,6 +10,7 @@ import {extractTokens} from '../computed/baseline/tokens.js';
 import {mapTokensToFeatureIds} from '../computed/baseline/map-to-feature-ids.js';
 import {fetchBaselineStatus} from '../computed/baseline/webstatus-client.js';
 import {calculateScore} from '../computed/baseline/score.js';
+import {loadBudgets, evaluateBudgets, getRouteFromUrl} from '../computed/baseline/budgets.js';
 
 const UIStrings = {
   /** Title of the Baseline audit when the page mostly uses widely-available features */
@@ -38,12 +39,16 @@ const UIStrings = {
   columnWhereFound: 'Where found',
   /** Table column header for usage weight */
   columnWeight: 'Weight',
+  /** Warning when baseline budget is violated */
+  warningBudgetViolation: 'Baseline budget violation: {reasons}',
   /** Warning when CSS coverage data is not available */
   warningNoCSSCoverage: 'CSS coverage data unavailable - analysis may be incomplete',
   /** Warning when JS usage data is not available */
   warningNoJSUsage: 'JavaScript usage tracking unavailable - analysis may be incomplete',
   /** Warning when WebStatus API is unreachable */
   warningAPIUnavailable: 'WebStatus API unreachable - showing cached/unknown status',
+  /** Warning when tokens couldn't be resolved to features */
+  warningUnresolvedTokens: 'Some tokens did not resolve to known features (see debugData.unresolved)',
 };
 
 const str_ = i18n.createIcuMessageFn(import.meta.url, UIStrings);
@@ -78,7 +83,7 @@ class BaselineReadiness extends Audit {
    * @param {LH.Audit.Context} context
    * @return {Promise<LH.Audit.Product>}
    */
-  static async _auditImpl(artifacts, _) {
+  static async _auditImpl(artifacts, context) {
     const warnings = [];
 
     try {
@@ -166,7 +171,9 @@ class BaselineReadiness extends Audit {
     }
 
     // Step 2: Map tokens to feature IDs
-    const {ids: featureIds} = mapTokensToFeatureIds(tokens);
+    const mappingResult = mapTokensToFeatureIds(tokens);
+    const featureIds = mappingResult.ids;
+    const unresolvedTokens = mappingResult.unresolved;
 
     if (featureIds.size === 0) {
       return {
@@ -213,11 +220,39 @@ class BaselineReadiness extends Audit {
       featureStatuses,
       tokens,
       tokenToFeatureMap,
-      usageData
+      usageData,
+      context.settings
     );
 
     // Add warnings from scoring
     warnings.push(...scoreResult.warnings);
+
+    // Add warning if unresolved tokens exist
+    if (unresolvedTokens.length > 0) {
+      warnings.push(str_(UIStrings.warningUnresolvedTokens));
+    }
+
+    // Load and evaluate budgets
+    const policy = loadBudgets({
+      settings: context.settings,
+      mainDocumentUrl: artifacts.URL?.finalDisplayedUrl,
+    });
+    const route = getRouteFromUrl(artifacts.URL?.finalDisplayedUrl || '/');
+    const budgetEvaluation = evaluateBudgets({
+      policy,
+      route,
+      score01: scoreResult.score01,
+      rows: scoreResult.rows,
+    });
+
+    // Override score if budget violated
+    let finalScore = scoreResult.score01;
+    if (budgetEvaluation.violated) {
+      finalScore = 0;
+      warnings.push(str_(UIStrings.warningBudgetViolation, {
+        reasons: budgetEvaluation.reasons.join('; '),
+      }));
+    }
 
     // Generate summary stats for display value
     // const stats = generateSummaryStats(scoreResult.rows);
@@ -228,8 +263,8 @@ class BaselineReadiness extends Audit {
       {key: 'status', label: str_(UIStrings.columnBaseline), valueType: 'text'},
       {key: 'low_date', label: str_(UIStrings.columnNewlySince), valueType: 'text'},
       {key: 'high_date', label: str_(UIStrings.columnWidelySince), valueType: 'text'},
-      {key: 'url', label: str_(UIStrings.columnWhereFound), valueType: 'url', 
-       subItemsHeading: {key: 'location', valueType: 'source-location'}},
+      {key: 'url', label: str_(UIStrings.columnWhereFound), valueType: 'url',
+        subItemsHeading: {key: 'location', valueType: 'source-location'}},
     ];
 
     // Add weight column if we have usage data
@@ -258,7 +293,7 @@ class BaselineReadiness extends Audit {
     });
 
     return {
-      score: scoreResult.score01,
+      score: finalScore,
       numericValue: scoreResult.numeric100,
       numericUnit: 'unitless',
       displayValue: str_(UIStrings.displayValue, {
@@ -269,6 +304,14 @@ class BaselineReadiness extends Audit {
       details: Audit.makeTableDetails(headings, tableRows, {
         isEntityGrouped: false,
       }),
+      debugData: {
+        policy: policy,
+        route: route,
+        budgetViolated: budgetEvaluation.violated,
+        mapVersion: mappingResult.mapVersion,
+        unresolved: unresolvedTokens.length > 0 ?
+          unresolvedTokens.slice(0, 10).map(t => t.token) : undefined,
+      },
       metricSavings: {
         // Could add performance metrics here if we correlate with loading impact
       },

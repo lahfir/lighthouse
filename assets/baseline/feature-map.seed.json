@@ -32,5 +32,6 @@
         "feature": "intl"
       }
     ]
-  }
+  },
+  "mapVersion": "seed"
 }
